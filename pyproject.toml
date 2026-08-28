@@ -1,0 +1,10 @@
+[project]
+name = "python-file-server"
+version = "0.1.0"
+description = "Python file server project managed by uv"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
+]

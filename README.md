@@ -1,0 +1,199 @@
+# python-file-server
+
+基于 uv 管理的 FastAPI + Uvicorn 文件服务器框架，接口全部使用 `async` 实现。
+
+## 技术栈
+
+- Python 3.13
+- FastAPI
+- Uvicorn
+- uv 管理依赖和版本
+
+## 快速开始
+
+```bash
+# 安装依赖
+uv sync
+
+# 启动开发服务器
+uv run uvicorn main:app --reload --port 8000
+
+# 调用接口
+curl http://127.0.0.1:8000/api/hello
+
+# 打开自动生成的接口文档
+open http://127.0.0.1:8000/docs
+```
+
+## 当前接口
+
+`GET /api/hello`
+
+返回 JSON：
+
+```json
+{"message": "hello world"}
+```
+
+所有接口使用 `async def` 定义，便于处理 IO 密集型任务。
+
+## Demo 接口场景
+
+以下接口用于演示不同 HTTP 方法和错误场景，数据保存在内存中，服务重启后重置：
+
+| 方法 | 路径 | 场景 |
+| --- | --- | --- |
+| GET | `/api/demo/files` | 文件列表 |
+| GET | `/api/demo/files?keyword=main` | Query 参数过滤 |
+| GET | `/api/demo/files/1` | 路径参数查询 |
+| GET | `/api/demo/files/999` | 文件不存在，返回 2001 |
+| POST | `/api/demo/files` | 请求体创建文件，返回 201 |
+| POST | `/api/demo/files` | 非法参数，返回 HTTP 422 |
+| PUT | `/api/demo/files/1` | 请求体更新文件 |
+| DELETE | `/api/demo/files/1` | 删除文件 |
+| GET | `/api/demo/auth/not-logged-in` | 未登录，返回 1001 |
+| GET | `/api/demo/auth/account-disabled` | 账号异常，返回 1003 |
+| GET | `/api/demo/error/unknown` | 未知异常，返回 5000 |
+
+## 统一响应格式
+
+正常业务响应统一返回以下结构：
+
+```json
+{
+  "code": 0,
+  "msg": "success",
+  "data": {}
+}
+```
+
+- `code=0` 表示业务成功
+- `data` 为接口原始返回内容
+
+程序中的业务错误通过 `BizError` 表达：
+
+```python
+from app.errors import FileNotFoundBizError
+
+raise FileNotFoundBizError(msg="file not found")
+```
+
+对应响应：
+
+```json
+{
+  "code": 2001,
+  "msg": "file not found",
+  "data": null
+}
+```
+
+HTTP 状态码由异常决定：业务错误默认 HTTP 200，认证和资源类错误使用真实 HTTP 状态码。HTTP 层错误（如 404、405、500）不包装，交给 FastAPI 默认处理，HTTP 状态码保持正常语义。`/docs`、`/redoc`、`/openapi.json` 等文档接口也不包装。
+
+中间件分工：
+
+- `ResponseWrapperMiddleware`：只包装正常 2xx 响应
+- `CustomExceptionMiddleware`：捕获 `BizError` 及子类，返回业务错误码
+- `GlobalExceptionMiddleware`：捕获未知异常，返回 `5000 system error` 并记录服务器日志
+
+## 错误码表
+
+| 错误码 | 含义 | HTTP 状态码 | 异常类 |
+| --- | --- | --- | --- |
+| 0 | 成功 | 200 | - |
+| 1001 | 未登录 | 401 | `NotLoggedInError` |
+| 1002 | 登录已过期 | 401 | 预留 |
+| 1003 | 账号被锁定或异常 | 403 | `AccountDisabledError` |
+| 1004 | 无权限 | 403 | 预留 |
+| 2001 | 文件不存在 | 404 | `FileNotFoundBizError` |
+| 2002 | 文件已存在 | 409 | 预留 |
+| 2003 | 文件过大 | 413 | 预留 |
+| 3001 | 参数格式错误 | 422 | 预留 |
+| 3002 | 参数缺失 | 422 | 预留 |
+| 5000 | 未知异常 | 500 | 预留 |
+
+## RESTful 风格
+
+- 资源：URL 代表资源，例如 `/api/files` 表示文件集合
+- 方法：`GET` 查询、`POST` 创建、`PUT`/`PATCH` 更新、`DELETE` 删除
+- 状态码：`200 OK`、`201 Created`、`400 Bad Request`、`404 Not Found` 等
+- 无状态：每个请求携带完整信息，服务器不保存客户端会话状态
+- 数据格式：通常使用 JSON
+- 命名：资源用名词，集合常用复数，层级用路径表达
+
+## 接口版本区隔
+
+同一个接口需要升级且保持兼容时，常用以下方式区分版本：
+
+- URL 路径：`/api/v1/hello`、`/api/v2/hello`，最直观，推荐使用
+- Header：`Accept-Version: v1`，不影响 URL，但调试不方便
+- Query：`/api/hello?version=v1`，简单但容易污染查询参数
+
+本项目当前使用 `/api/hello`，暂不区分版本；后续新增 v1/v2 时按 URL 路径方式扩展。
+
+## 工程结构
+
+```text
+main.py
+app/
+  __init__.py
+  errors.py
+  middleware.py
+  api/
+    __init__.py
+    demo.py
+    hello.py
+```
+
+- `main.py`：创建 FastAPI 应用并挂载路由
+- `app/errors.py`：业务错误 `BizError`、错误码和异常子类
+- `app/middleware.py`：统一响应包装、自定义异常处理、全局异常兜底
+- `app/api/demo.py`：HTTP 方法和错误场景演示路由
+- `app/api/hello.py`：hello 接口路由
+
+## 环境要求
+
+- 已安装 [uv](https://docs.astral.sh/uv/)
+- Python 版本由 uv 管理，推荐 3.13
+
+## 创建工程步骤
+
+以下命令演示如何从空目录创建一个同样配置的工程：
+
+```bash
+# 1. 初始化应用工程，同时初始化 Git 并锁定 Python 3.13
+uv init --app --vcs git --python 3.13 --name python-file-server .
+
+# 2. 根据 pyproject.toml 生成 uv.lock，锁定依赖版本
+uv lock
+
+# 3. 按锁文件创建虚拟环境并同步依赖
+uv sync
+
+# 4. 添加 FastAPI 和 Uvicorn 依赖
+uv add fastapi 'uvicorn[standard]'
+
+# 5. 启动开发服务器
+uv run uvicorn main:app --reload --port 8000
+```
+
+uv init 生成的 `main.py` 需要替换为本项目的 FastAPI 版本，并补充 `app/` 路由结构。
+
+## 日常命令
+
+```bash
+# 安装或更新依赖，会自动更新 uv.lock
+uv add <package>
+
+# 同步锁文件中的依赖到虚拟环境
+uv sync
+
+# 在虚拟环境中运行命令
+uv run <command>
+```
+
+## 版本锁定说明
+
+- `.python-version` 固定 Python 版本，当前为 3.13
+- `uv.lock` 固定所有直接依赖和间接依赖的精确版本
+- 依赖变更后请提交 `pyproject.toml`、`uv.lock` 和 `.python-version` 的变更
