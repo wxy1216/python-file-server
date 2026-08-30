@@ -2,11 +2,7 @@ from fastapi import FastAPI
 
 from app.api.hello import router as hello_router
 from app.api.demo import router as demo_router
-from app.middleware import (
-    CustomExceptionMiddleware,
-    GlobalExceptionMiddleware,
-    ResponseWrapperMiddleware,
-)
+from app.middleware import ApiMiddleware
 
 app = FastAPI(
     title="Python File Server",
@@ -14,9 +10,7 @@ app = FastAPI(
     version="0.1.0",
 )
 
-app.add_middleware(ResponseWrapperMiddleware)
-app.add_middleware(CustomExceptionMiddleware)
-app.add_middleware(GlobalExceptionMiddleware)
+app.add_middleware(ApiMiddleware)
 app.include_router(hello_router)
 app.include_router(demo_router, prefix="/api/demo")
 

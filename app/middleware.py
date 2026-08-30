@@ -15,12 +15,25 @@ EXCLUDED_PATHS = ("/docs", "/redoc", "/openapi.json")
 logger = logging.getLogger(__name__)
 
 
-class ResponseWrapperMiddleware(BaseHTTPMiddleware):
+class ApiMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.url.path.startswith(EXCLUDED_PATHS):
             return await call_next(request)
 
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except BizError as exc:
+            return JSONResponse(
+                {"code": exc.code, "msg": exc.msg, "data": exc.data},
+                status_code=exc.http_status_code,
+            )
+        except Exception:
+            logger.exception("unhandled exception")
+            return JSONResponse(
+                {"code": ErrorCode.UNKNOWN, "msg": "system error", "data": None},
+                status_code=500,
+            )
+
         if response.status_code == 204:
             return response
         if not 200 <= response.status_code < 300:
@@ -40,26 +53,3 @@ class ResponseWrapperMiddleware(BaseHTTPMiddleware):
             return json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError):
             return body.decode("utf-8", errors="replace")
-
-
-class CustomExceptionMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        try:
-            return await call_next(request)
-        except BizError as exc:
-            return JSONResponse(
-                {"code": exc.code, "msg": exc.msg, "data": exc.data},
-                status_code=exc.http_status_code,
-            )
-
-
-class GlobalExceptionMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        try:
-            return await call_next(request)
-        except Exception:
-            logger.exception("unhandled exception")
-            return JSONResponse(
-                {"code": ErrorCode.UNKNOWN, "msg": "system error", "data": None},
-                status_code=500,
-            )

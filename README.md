@@ -90,11 +90,12 @@ raise FileNotFoundBizError(msg="file not found")
 
 HTTP 状态码由异常决定：业务错误默认 HTTP 200，认证和资源类错误使用真实 HTTP 状态码。HTTP 层错误（如 404、405、500）不包装，交给 FastAPI 默认处理，HTTP 状态码保持正常语义。`/docs`、`/redoc`、`/openapi.json` 等文档接口也不包装。
 
-中间件分工：
+统一中间件 `ApiMiddleware` 的职责：
 
-- `ResponseWrapperMiddleware`：只包装正常 2xx 响应
-- `CustomExceptionMiddleware`：捕获 `BizError` 及子类，返回业务错误码
-- `GlobalExceptionMiddleware`：捕获未知异常，返回 `5000 system error` 并记录服务器日志
+- 放行 `/docs`、`/openapi.json` 等文档接口
+- 捕获 `BizError` 及子类，返回业务错误码
+- 捕获未知异常，返回 `5000 system error` 并记录服务器日志
+- 包装正常 2xx 响应
 
 ## 错误码表
 
@@ -147,7 +148,7 @@ app/
 
 - `main.py`：创建 FastAPI 应用并挂载路由
 - `app/errors.py`：业务错误 `BizError`、错误码和异常子类
-- `app/middleware.py`：统一响应包装、自定义异常处理、全局异常兜底
+- `app/middleware.py`：统一 API 中间件，处理响应包装、业务异常和全局兜底
 - `app/api/demo.py`：HTTP 方法和错误场景演示路由
 - `app/api/hello.py`：hello 接口路由
 
