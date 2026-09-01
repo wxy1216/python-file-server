@@ -38,6 +38,18 @@ open http://127.0.0.1:8000/docs
 
 所有接口使用 `async def` 定义，便于处理 IO 密集型任务。
 
+## 文件接口
+
+| 方法 | 路径 | 场景 |
+| --- | --- | --- |
+| POST | `/api/files` | multipart 上传文件，返回文件元数据 |
+| GET | `/api/files` | 文件元数据列表，支持 `keyword`、`limit`、`offset` |
+| GET | `/api/files/{id}` | 单个文件元数据 |
+| GET | `/api/files/{id}/download` | 流式下载原始文件 |
+| DELETE | `/api/files/{id}` | 删除元数据和磁盘文件 |
+
+文件本体保存在 `data/files/`，元数据保存在 SQLite `data/app.db`。配置了 `API_TOKEN` 时，所有文件接口必须携带请求头 `X-API-Token: <token>`。
+
 ## Demo 接口场景
 
 以下接口用于演示不同 HTTP 方法和错误场景，数据保存在内存中，服务重启后重置：
@@ -195,17 +207,27 @@ main.py
 app/
   __init__.py
   errors.py
+  config.py
+  db.py
+  security.py
+  storage.py
   middleware.py
   logging_config.py
   trace.py
   api/
     __init__.py
+    files.py
     demo.py
     hello.py
 ```
 
 - `main.py`：创建 FastAPI 应用并挂载路由
 - `app/errors.py`：业务错误 `BizError`、错误码和异常子类
+- `app/config.py`：环境变量配置
+- `app/db.py`：SQLite 初始化和文件元数据读写
+- `app/security.py`：API Token 鉴权依赖
+- `app/storage.py`：文件流式落盘、删除和路径解析
+- `app/api/files.py`：真实文件上传、列表、详情、下载、删除接口
 - `app/middleware.py`：API 中间件与 TraceMiddleware，处理响应包装、业务异常和请求追踪
 - `app/logging_config.py`：Loguru 配置，stdout、info/wf 文件与 Uvicorn 日志接管
 - `app/trace.py`：request_id 上下文与生成逻辑
@@ -216,6 +238,30 @@ app/
 
 - 已安装 [uv](https://docs.astral.sh/uv/)
 - Python 版本由 uv 管理，推荐 3.13
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `API_TOKEN` | 空 | API Token；为空时开发模式放行并告警 |
+| `FILE_STORAGE_DIR` | `data/files` | 文件本体目录 |
+| `DB_PATH` | `data/app.db` | SQLite 数据库路径 |
+| `MAX_UPLOAD_SIZE` | `104857600` | 单文件上传上限，单位字节 |
+| `PYTHON_BASE_IMAGE` | `python:3.13-slim` | Docker 运行阶段基础镜像，网络受限时可换成镜像加速源 |
+
+## Docker 部署
+
+```bash
+# 构建并启动
+API_TOKEN=your-token docker compose up -d --build
+
+# 验证
+curl -H "X-API-Token: your-token" http://127.0.0.1:8000/api/files
+```
+
+容器使用标准 uv 两阶段构建，运行阶段不再包含 uv。文件、数据库、日志分别挂载 volume，容器重建后数据不丢失。
+
+部署时请务必设置 `API_TOKEN`；未设置时容器仍会启动，但文件接口不做鉴权并打印告警。
 
 ## 创建工程步骤
 

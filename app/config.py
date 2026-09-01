@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+@dataclass(frozen=True)
+class Settings:
+    api_token: str = os.getenv("API_TOKEN", "")
+    storage_dir: Path = Path(
+        os.getenv("FILE_STORAGE_DIR", str(BASE_DIR / "data" / "files"))
+    )
+    db_path: Path = Path(os.getenv("DB_PATH", str(BASE_DIR / "data" / "app.db")))
+    max_upload_size: int = _env_int("MAX_UPLOAD_SIZE", 100 * 1024 * 1024)
+
+
+settings = Settings()

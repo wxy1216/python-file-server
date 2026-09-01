@@ -46,3 +46,8 @@ class AccountDisabledError(BizError):
 class FileNotFoundBizError(BizError):
     def __init__(self, msg: str = "file not found", data: Any = None) -> None:
         super().__init__(ErrorCode.FILE_NOT_FOUND, msg, data, http_status_code=404)
+
+
+class FileTooLargeError(BizError):
+    def __init__(self, msg: str = "file too large", data: Any = None) -> None:
+        super().__init__(ErrorCode.FILE_TOO_LARGE, msg, data, http_status_code=413)

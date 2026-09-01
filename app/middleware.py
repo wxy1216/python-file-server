@@ -46,6 +46,14 @@ class ApiMiddleware(BaseHTTPMiddleware):
                 status_code=500,
             )
 
+        # File downloads and non-JSON responses must stay untouched so the
+        # body can stream to the client instead of being buffered and wrapped.
+        content_type = response.headers.get("content-type", "")
+        if response.headers.get("content-disposition") or not content_type.startswith(
+            "application/json"
+        ):
+            return response
+
         if response.status_code == 204:
             return response
         if not 200 <= response.status_code < 300:

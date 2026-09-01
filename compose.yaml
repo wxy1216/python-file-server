@@ -1,0 +1,24 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.13-slim}
+    image: python-file-server:latest
+    ports:
+      - "8000:8000"
+    environment:
+      API_TOKEN: ${API_TOKEN:-}
+      FILE_STORAGE_DIR: /app/data/files
+      DB_PATH: /app/data/db/app.db
+      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-104857600}
+    volumes:
+      - file-data:/app/data/files
+      - db-data:/app/data/db
+      - logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  file-data:
+  db-data:
+  logs:
