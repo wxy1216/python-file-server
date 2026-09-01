@@ -4,6 +4,7 @@ import logging
 import sys
 
 from loguru import logger
+from app.trace import get_request_id
 from uvicorn.config import LOGGING_CONFIG as uvicorn_logging_config
 
 
@@ -26,14 +27,22 @@ class InterceptHandler(logging.Handler):
 CONSOLE_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
     "<level>{level: <8}</level> | "
+    "<cyan>{extra[request_id]: >32}</cyan> | "
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
     "<level>{message}</level>"
 )
-FILE_FORMAT = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
+FILE_FORMAT = (
+    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
+    "{extra[request_id]: >32} | {name}:{function}:{line} - {message}"
+)
 
 
 def setup_logging() -> None:
     logger.remove()
+    logger.configure(
+        extra={"request_id": "-"},
+        patcher=lambda record: record["extra"].update(request_id=get_request_id()),
+    )
 
     logger.add(
         sys.stdout,

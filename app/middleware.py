@@ -8,9 +8,19 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.errors import BizError, ErrorCode
+from app.trace import generate_request_id, request_id_var
 from loguru import logger
 
 EXCLUDED_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
+class TraceMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        request_id = request.headers.get("X-Request-Id") or generate_request_id()
+        request_id_var.set(request_id)
+        response = await call_next(request)
+        response.headers.setdefault("X-Request-Id", request_id)
+        return response
 
 
 class ApiMiddleware(BaseHTTPMiddleware):

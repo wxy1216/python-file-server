@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from app.api.hello import router as hello_router
 from app.api.demo import router as demo_router
 from app.logging_config import setup_logging
-from app.middleware import ApiMiddleware
+from app.middleware import ApiMiddleware, TraceMiddleware
 
 setup_logging()
 
@@ -24,6 +24,7 @@ app = FastAPI(
 )
 
 app.add_middleware(ApiMiddleware)
+app.add_middleware(TraceMiddleware)
 app.include_router(hello_router)
 app.include_router(demo_router, prefix="/api/demo")
 
