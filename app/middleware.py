@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -9,10 +8,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.errors import BizError, ErrorCode
+from loguru import logger
 
 EXCLUDED_PATHS = ("/docs", "/redoc", "/openapi.json")
-
-logger = logging.getLogger(__name__)
 
 
 class ApiMiddleware(BaseHTTPMiddleware):
@@ -27,8 +25,12 @@ class ApiMiddleware(BaseHTTPMiddleware):
                 {"code": exc.code, "msg": exc.msg, "data": exc.data},
                 status_code=exc.http_status_code,
             )
-        except Exception:
-            logger.exception("unhandled exception")
+        except Exception as exc:
+            logger.opt(exception=exc).error(
+                "unhandled exception: {} {}",
+                request.method,
+                request.url.path,
+            )
             return JSONResponse(
                 {"code": ErrorCode.UNKNOWN, "msg": "system error", "data": None},
                 status_code=500,
