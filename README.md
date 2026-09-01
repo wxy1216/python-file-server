@@ -7,6 +7,7 @@
 - Python 3.13
 - FastAPI
 - Uvicorn
+- Loguru
 - uv 管理依赖和版本
 
 ## 快速开始
@@ -113,6 +114,61 @@ HTTP 状态码由异常决定：业务错误默认 HTTP 200，认证和资源类
 | 3002 | 参数缺失 | 422 | 预留 |
 | 5000 | 未知异常 | 500 | 预留 |
 
+## 日志与追踪
+
+项目使用 Loguru 统一输出日志，启动时由 `app/logging_config.py` 中的 `setup_logging()` 完成配置，所有日志都会自动带上请求追踪 id。
+
+### 日志输出
+
+| 输出位置 | 说明 |
+| --- | --- |
+| stdout | 控制台日志，适合本地开发和 Docker 容器 |
+| `logs/app_info_*.log` | 全量日志，记录 INFO 及以上级别 |
+| `logs/app_wf_*.log` | 告警日志，只记录 WARNING/ERROR/CRITICAL |
+
+日志文件按天切分，旧文件压缩为 zip 后保留：info 文件保留 30 天，wf 文件保留 90 天。`logs/` 目录已加入 `.gitignore`。
+
+### 日志级别
+
+| 级别 | 数值 | 典型用途 |
+| --- | --- | --- |
+| TRACE | 5 | 极细内部跟踪，默认不使用 |
+| DEBUG | 10 | 开发调试 |
+| INFO | 20 | 正常业务流程 |
+| SUCCESS | 25 | 成功事件 |
+| WARNING | 30 | 不致命但需要注意 |
+| ERROR | 40 | 业务或系统错误 |
+| CRITICAL | 50 | 致命错误 |
+
+### 请求追踪
+
+`TraceMiddleware` 负责请求链路 id：
+
+- 请求头携带 `X-Request-Id` 时原样透传
+- 未携带时生成 32 位十六进制 id
+- 响应头回写 `X-Request-Id`
+- 该请求内的应用日志、异常日志和访问日志共用同一个 request_id
+- 无请求上下文时，日志中的 request_id 显示为 `-`
+
+验证方式：
+
+```bash
+# 查看响应头中的 X-Request-Id
+curl -i http://127.0.0.1:8000/api/hello
+
+# 主动透传请求 id
+curl -i -H "X-Request-Id: demo-trace-id" http://127.0.0.1:8000/api/hello
+
+# 触发未知异常，观察 ERROR 日志与访问日志使用同一个 id
+curl http://127.0.0.1:8000/api/demo/error/unknown
+
+# 查看日志
+tail -f logs/app_info_$(date +%F).log
+tail -f logs/app_wf_$(date +%F).log
+```
+
+注意：使用 `--reload` 启动时，reloader 进程自身输出的前几行仍为 Uvicorn 默认格式，应用进程日志统一走 Loguru。
+
 ## RESTful 风格
 
 - 资源：URL 代表资源，例如 `/api/files` 表示文件集合
@@ -140,6 +196,8 @@ app/
   __init__.py
   errors.py
   middleware.py
+  logging_config.py
+  trace.py
   api/
     __init__.py
     demo.py
@@ -148,7 +206,9 @@ app/
 
 - `main.py`：创建 FastAPI 应用并挂载路由
 - `app/errors.py`：业务错误 `BizError`、错误码和异常子类
-- `app/middleware.py`：统一 API 中间件，处理响应包装、业务异常和全局兜底
+- `app/middleware.py`：API 中间件与 TraceMiddleware，处理响应包装、业务异常和请求追踪
+- `app/logging_config.py`：Loguru 配置，stdout、info/wf 文件与 Uvicorn 日志接管
+- `app/trace.py`：request_id 上下文与生成逻辑
 - `app/api/demo.py`：HTTP 方法和错误场景演示路由
 - `app/api/hello.py`：hello 接口路由
 
@@ -174,7 +234,10 @@ uv sync
 # 4. 添加 FastAPI 和 Uvicorn 依赖
 uv add fastapi 'uvicorn[standard]'
 
-# 5. 启动开发服务器
+# 5. 添加 Loguru 依赖
+uv add loguru
+
+# 6. 启动开发服务器
 uv run uvicorn main:app --reload --port 8000
 ```
 
