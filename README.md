@@ -141,7 +141,7 @@ HTTP 状态码由异常决定：业务错误默认 HTTP 200，认证和资源类
 
 ## 日志与追踪
 
-项目使用 Loguru 统一输出日志，启动时由 `app/logging_config.py` 中的 `setup_logging()` 完成配置，所有日志都会自动带上请求追踪 id。
+项目使用 Loguru 统一输出日志，启动时由 `app/logging_config.py` 中的 `setup_logging()` 完成配置，所有日志都会自动带上 B3 的 traceId/spanId。
 
 ### 日志输出
 
@@ -167,24 +167,28 @@ HTTP 状态码由异常决定：业务错误默认 HTTP 200，认证和资源类
 
 ### 请求追踪
 
-`TraceMiddleware` 负责请求链路 id：
+`TraceMiddleware` 负责 B3 链路追踪 id：
 
-- 请求头携带 `X-Request-Id` 时原样透传
-- 未携带时生成 32 位十六进制 id
-- 响应头回写 `X-Request-Id`
-- 该请求内的应用日志、异常日志和访问日志共用同一个 request_id
-- 无请求上下文时，日志中的 request_id 显示为 `-`
+- `X-B3-TraceId`：32 位十六进制，上游透传合法值，否则生成
+- `X-B3-SpanId`：16 位十六进制，每次请求生成新的 spanId
+- 上游携带的 spanId 作为 parentSpanId，只存上下文不展示
+- 响应头回写 `X-B3-TraceId` 和 `X-B3-SpanId`
+- 该请求内的应用日志、异常日志和访问日志共用同一对 traceId/spanId
+- 无请求上下文时，日志中的 traceId/spanId 显示为 `-`
 
 验证方式：
 
 ```bash
-# 查看响应头中的 X-Request-Id
+# 查看响应头中的 X-B3-TraceId 和 X-B3-SpanId
 curl -i http://127.0.0.1:8000/api/hello
 
-# 主动透传请求 id
-curl -i -H "X-Request-Id: demo-trace-id" http://127.0.0.1:8000/api/hello
+# 主动透传 traceId 和上游 spanId
+curl -i \
+  -H "X-B3-TraceId: 463ac35c9f6413ad48485a3953bb6124" \
+  -H "X-B3-SpanId: a2fb4a1d1a96d312" \
+  http://127.0.0.1:8000/api/hello
 
-# 触发未知异常，观察 ERROR 日志与访问日志使用同一个 id
+# 触发未知异常，观察 ERROR 日志与访问日志使用同一对 traceId/spanId
 curl http://127.0.0.1:8000/api/demo/error/unknown
 
 # 查看日志
@@ -243,7 +247,7 @@ app/
 - `app/api/files.py`：真实文件上传、列表、详情、下载、删除接口
 - `app/middleware.py`：API 中间件与 TraceMiddleware，处理响应包装、业务异常和请求追踪
 - `app/logging_config.py`：Loguru 配置，stdout、info/wf 文件与 Uvicorn 日志接管
-- `app/trace.py`：request_id 上下文与生成逻辑
+- `app/trace.py`：B3 traceId/spanId 上下文与生成逻辑
 - `app/api/demo.py`：HTTP 方法和错误场景演示路由
 - `app/api/hello.py`：hello 接口路由
 

@@ -4,7 +4,7 @@ import logging
 import sys
 
 from loguru import logger
-from app.trace import get_request_id
+from app.trace import get_span_id, get_trace_id
 from uvicorn.config import LOGGING_CONFIG as uvicorn_logging_config
 
 
@@ -21,27 +21,34 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
 
 
 CONSOLE_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
     "<level>{level: <8}</level> | "
-    "<cyan>{extra[request_id]: >32}</cyan> | "
+    "traceId=<cyan>{extra[traceId]}</cyan> "
+    "spanId=<cyan>{extra[spanId]}</cyan> | "
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
     "<level>{message}</level>"
 )
 FILE_FORMAT = (
     "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-    "{extra[request_id]: >32} | {name}:{function}:{line} - {message}"
+    "traceId={extra[traceId]} spanId={extra[spanId]} | "
+    "{name}:{function}:{line} - {message}"
 )
 
 
 def setup_logging() -> None:
     logger.remove()
     logger.configure(
-        extra={"request_id": "-"},
-        patcher=lambda record: record["extra"].update(request_id=get_request_id()),
+        extra={"traceId": "-", "spanId": "-"},
+        patcher=lambda record: record["extra"].update(
+            traceId=get_trace_id(),
+            spanId=get_span_id(),
+        ),
     )
 
     logger.add(
@@ -63,6 +70,7 @@ def setup_logging() -> None:
         enqueue=True,
         backtrace=True,
         diagnose=False,
+        watch=True,
     )
 
     logger.add(
@@ -76,6 +84,7 @@ def setup_logging() -> None:
         enqueue=True,
         backtrace=True,
         diagnose=False,
+        watch=True,
     )
 
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
