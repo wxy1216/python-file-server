@@ -59,14 +59,15 @@ open http://127.0.0.1:8000/docs
 | GET | `/api/demo/files` | 文件列表 |
 | GET | `/api/demo/files?keyword=main` | Query 参数过滤 |
 | GET | `/api/demo/files/1` | 路径参数查询 |
-| GET | `/api/demo/files/999` | 文件不存在，返回 2001 |
+| GET | `/api/demo/files/999` | 文件不存在，返回 30001 |
 | POST | `/api/demo/files` | 请求体创建文件，返回 201 |
 | POST | `/api/demo/files` | 非法参数，返回 HTTP 422 |
 | PUT | `/api/demo/files/1` | 请求体更新文件 |
 | DELETE | `/api/demo/files/1` | 删除文件 |
-| GET | `/api/demo/auth/not-logged-in` | 未登录，返回 1001 |
-| GET | `/api/demo/auth/account-disabled` | 账号异常，返回 1003 |
-| GET | `/api/demo/error/unknown` | 未知异常，返回 5000 |
+| GET | `/api/demo/auth/not-logged-in` | 未登录，返回 20001 |
+| GET | `/api/demo/auth/account-disabled` | 账号异常，返回 20003 |
+| GET | `/api/demo/error/unknown` | 未知异常，返回 99999 |
+| GET | `/api/demo/error/service` | 组件异常，返回 40001 |
 
 ## 统一响应格式
 
@@ -95,7 +96,7 @@ raise FileNotFoundBizError(msg="file not found")
 
 ```json
 {
-  "code": 2001,
+  "code": 30001,
   "msg": "file not found",
   "data": null
 }
@@ -106,25 +107,37 @@ HTTP 状态码由异常决定：业务错误默认 HTTP 200，认证和资源类
 统一中间件 `ApiMiddleware` 的职责：
 
 - 放行 `/docs`、`/openapi.json` 等文档接口
-- 捕获 `BizError` 及子类，返回业务错误码
-- 捕获未知异常，返回 `5000 system error` 并记录服务器日志
+- 捕获 `BizError` 及子类，返回业务错误码并记录 WARNING 日志
+- 捕获 `SvcError`，对外返回 `internal server error`，通过错误码定位问题类型
+- 捕获未知异常，返回 `99999 internal server error` 并记录服务器日志
 - 包装正常 2xx 响应
+
+错误语义：
+
+- `BizError`：错误码和文案可以告知客户，如参数缺失、格式错误、文件不存在等。
+- `SvcError`：明确捕获的已知内部异常，不向客户暴露真实文案，统一返回 `internal server error`，真实错误信息只进日志。
+- 其他未捕获异常：说明系统设计未覆盖，返回 `99999 internal server error`，需要结合日志持续优化。
 
 ## 错误码表
 
-| 错误码 | 含义 | HTTP 状态码 | 异常类 |
-| --- | --- | --- | --- |
-| 0 | 成功 | 200 | - |
-| 1001 | 未登录 | 401 | `NotLoggedInError` |
-| 1002 | 登录已过期 | 401 | 预留 |
-| 1003 | 账号被锁定或异常 | 403 | `AccountDisabledError` |
-| 1004 | 无权限 | 403 | 预留 |
-| 2001 | 文件不存在 | 404 | `FileNotFoundBizError` |
-| 2002 | 文件已存在 | 409 | 预留 |
-| 2003 | 文件过大 | 413 | 预留 |
-| 3001 | 参数格式错误 | 422 | 预留 |
-| 3002 | 参数缺失 | 422 | 预留 |
-| 5000 | 未知异常 | 500 | 预留 |
+错误码按大类分组，分类号只用于归类标识，实际响应返回具体错误码。
+
+| 分类 | 错误码 | 含义 | HTTP 状态码 | 异常类 |
+| --- | --- | --- | --- | --- |
+| - | 0 | 成功 | 200 | - |
+| 10000 参数类 | 10001 | 参数格式错误 | 422 | 预留 |
+| 10000 参数类 | 10002 | 参数缺失 | 422 | 预留 |
+| 20000 鉴权认证类 | 20001 | 未登录 | 401 | `NotLoggedInError` |
+| 20000 鉴权认证类 | 20002 | 登录已过期 | 401 | 预留 |
+| 20000 鉴权认证类 | 20003 | 账号被锁定或异常 | 403 | `AccountDisabledError` |
+| 20000 鉴权认证类 | 20004 | 无权限 | 403 | 预留 |
+| 30000 业务类 | 30001 | 文件不存在 | 404 | `FileNotFoundBizError` |
+| 30000 业务类 | 30002 | 文件已存在 | 409 | 预留 |
+| 30000 业务类 | 30003 | 文件过大 | 413 | `FileTooLargeError` |
+| 40000 组件类 | 40001 | 数据库调用失败 | 500 | `DatabaseError` |
+| 40000 组件类 | 40002 | 系统命令调用失败 | 500 | `SystemCommandError` |
+| 40000 组件类 | 40003 | 外部接口调用失败 | 500 | `ExternalAPIError` |
+| 99999 未知 | 99999 | 未知异常 | 500 | 预留 |
 
 ## 日志与追踪
 

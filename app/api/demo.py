@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 from app.errors import (
     AccountDisabledError,
+    DatabaseError,
     FileNotFoundBizError,
     NotLoggedInError,
 )
@@ -84,3 +85,8 @@ async def demo_account_disabled() -> None:
 @router.get("/error/unknown")
 async def demo_unknown_error() -> None:
     raise RuntimeError("demo unexpected error")
+
+
+@router.get("/error/service")
+async def demo_service_error() -> None:
+    raise DatabaseError(msg="database unavailable")

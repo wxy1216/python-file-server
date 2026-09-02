@@ -7,7 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from app.errors import BizError, ErrorCode
+from app.errors import BizError, ErrorCode, SvcError
 from app.trace import generate_request_id, request_id_var
 from loguru import logger
 
@@ -31,9 +31,28 @@ class ApiMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except BizError as exc:
+            logger.opt(exception=exc).warning(
+                "biz error: {} {} code={} msg={}",
+                request.method,
+                request.url.path,
+                exc.code,
+                exc.msg,
+            )
             return JSONResponse(
                 {"code": exc.code, "msg": exc.msg, "data": exc.data},
                 status_code=exc.http_status_code,
+            )
+        except SvcError as exc:
+            logger.opt(exception=exc).error(
+                "service error: {} {} code={} msg={}",
+                request.method,
+                request.url.path,
+                exc.code,
+                exc.msg,
+            )
+            return JSONResponse(
+                {"code": exc.code, "msg": "internal server error", "data": None},
+                status_code=500,
             )
         except Exception as exc:
             logger.opt(exception=exc).error(
@@ -42,7 +61,7 @@ class ApiMiddleware(BaseHTTPMiddleware):
                 request.url.path,
             )
             return JSONResponse(
-                {"code": ErrorCode.UNKNOWN, "msg": "system error", "data": None},
+                {"code": ErrorCode.UNKNOWN, "msg": "internal server error", "data": None},
                 status_code=500,
             )
 
