@@ -26,6 +26,9 @@ class Settings:
     )
     db_path: Path = Path(os.getenv("DB_PATH", str(BASE_DIR / "data" / "app.db")))
     max_upload_size: int = _env_int("MAX_UPLOAD_SIZE", 100 * 1024 * 1024)
+    file_chunk_size: int = max(
+        1, _env_int("FILE_CHUNK_SIZE", 8 * 1024 * 1024)
+    )
 
 
 settings = Settings()

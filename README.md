@@ -45,10 +45,12 @@ open http://127.0.0.1:8000/docs
 | POST | `/api/files` | multipart 上传文件，返回文件元数据 |
 | GET | `/api/files` | 文件元数据列表，支持 `keyword`、`limit`、`offset` |
 | GET | `/api/files/{id}` | 单个文件元数据 |
-| GET | `/api/files/{id}/download` | 流式下载原始文件 |
+| GET | `/api/files/{id}/chunks` | 分片清单，包含每片的 `seq`、`size`、`sha256` 和下载 URL |
+| GET | `/api/files/{id}/chunks/{seq}` | 下载单个分片 |
+| GET/HEAD | `/api/files/{id}/download` | 下载完整文件（内部跨分片虚拟流式读取，支持 `Range`） |
 | DELETE | `/api/files/{id}` | 删除元数据和磁盘文件 |
 
-文件本体保存在 `data/files/`，元数据保存在 SQLite `data/app.db`。配置了 `API_TOKEN` 时，所有文件接口必须携带请求头 `X-API-Token: <token>`。
+上传落盘时按 `FILE_CHUNK_SIZE`（默认 8 MiB）自动切片，文件以分片形式保存在 `data/files/<storage_key>/<seq>.part`，不保留完整副本；元数据和分片索引保存在 SQLite `data/app.db`。`GET /download` 对外仍是完整文件下载，支持 `Range`/`HEAD`，由实现层跨分片流式读取。配置了 `API_TOKEN` 时，所有文件接口必须携带请求头 `X-API-Token: <token>`。
 
 ## Demo 接口场景
 
@@ -134,9 +136,11 @@ HTTP 状态码由异常决定：业务错误默认 HTTP 200，认证和资源类
 | 30000 业务类 | 30001 | 文件不存在 | 404 | `FileNotFoundBizError` |
 | 30000 业务类 | 30002 | 文件已存在 | 409 | 预留 |
 | 30000 业务类 | 30003 | 文件过大 | 413 | `FileTooLargeError` |
+| 30000 业务类 | 30004 | 文件分片不存在 | 404 | `ChunkNotFoundBizError` |
 | 40000 组件类 | 40001 | 数据库调用失败 | 500 | `DatabaseError` |
 | 40000 组件类 | 40002 | 系统命令调用失败 | 500 | `SystemCommandError` |
 | 40000 组件类 | 40003 | 外部接口调用失败 | 500 | `ExternalAPIError` |
+| 40000 组件类 | 40004 | 文件数据缺失 | 500 | `FileDataMissingError` |
 | 99999 未知 | 99999 | 未知异常 | 500 | 预留 |
 
 ## 日志与追踪
@@ -228,6 +232,7 @@ app/
   db.py
   security.py
   storage.py
+  responses.py
   middleware.py
   logging_config.py
   trace.py
@@ -243,8 +248,9 @@ app/
 - `app/config.py`：环境变量配置
 - `app/db.py`：SQLite 初始化和文件元数据读写
 - `app/security.py`：API Token 鉴权依赖
-- `app/storage.py`：文件流式落盘、删除和路径解析
-- `app/api/files.py`：真实文件上传、列表、详情、下载、删除接口
+- `app/storage.py`：文件流式分片落盘、删除和路径解析
+- `app/responses.py`：跨分片虚拟文件下载响应，支持 `Range` 和 `HEAD`
+- `app/api/files.py`：真实文件上传、列表、详情、分片、下载、删除接口
 - `app/middleware.py`：API 中间件与 TraceMiddleware，处理响应包装、业务异常和请求追踪
 - `app/logging_config.py`：Loguru 配置，stdout、info/wf 文件与 Uvicorn 日志接管
 - `app/trace.py`：B3 traceId/spanId 上下文与生成逻辑
@@ -261,9 +267,10 @@ app/
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `API_TOKEN` | 空 | API Token；为空时开发模式放行并告警 |
-| `FILE_STORAGE_DIR` | `data/files` | 文件本体目录 |
+| `FILE_STORAGE_DIR` | `data/files` | 分片存储根目录 |
 | `DB_PATH` | `data/app.db` | SQLite 数据库路径 |
 | `MAX_UPLOAD_SIZE` | `104857600` | 单文件上传上限，单位字节 |
+| `FILE_CHUNK_SIZE` | `8388608` | 上传自动切片大小，单位字节 |
 | `PYTHON_BASE_IMAGE` | `python:3.13-slim` | Docker 运行阶段基础镜像，网络受限时可换成镜像加速源 |
 
 ## Docker 部署

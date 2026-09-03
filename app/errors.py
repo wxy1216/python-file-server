@@ -21,11 +21,13 @@ class ErrorCode(IntEnum):
     FILE_NOT_FOUND = 30001
     FILE_ALREADY_EXISTS = 30002
     FILE_TOO_LARGE = 30003
+    CHUNK_NOT_FOUND = 30004
 
-    # 40000 组件类错误（预留）
+    # 40000 组件类错误
     DATABASE_ERROR = 40001
     SYSTEM_COMMAND_ERROR = 40002
     EXTERNAL_API_ERROR = 40003
+    FILE_DATA_MISSING = 40004
 
     # 99999 未知异常
     UNKNOWN = 99999
@@ -66,6 +68,15 @@ class FileTooLargeError(BizError):
         super().__init__(ErrorCode.FILE_TOO_LARGE, msg, data, http_status_code=413)
 
 
+class ChunkNotFoundBizError(BizError):
+    def __init__(
+        self,
+        msg: str = "file chunk not found",
+        data: Any = None,
+    ) -> None:
+        super().__init__(ErrorCode.CHUNK_NOT_FOUND, msg, data, http_status_code=404)
+
+
 class SvcError(Exception):
     def __init__(self, code: int, msg: str, data: Any = None) -> None:
         self.code = code
@@ -87,3 +98,8 @@ class SystemCommandError(SvcError):
 class ExternalAPIError(SvcError):
     def __init__(self, msg: str = "external api error", data: Any = None) -> None:
         super().__init__(ErrorCode.EXTERNAL_API_ERROR, msg, data)
+
+
+class FileDataMissingError(SvcError):
+    def __init__(self, msg: str = "file data missing", data: Any = None) -> None:
+        super().__init__(ErrorCode.FILE_DATA_MISSING, msg, data)
