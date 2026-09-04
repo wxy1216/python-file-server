@@ -50,7 +50,7 @@ open http://127.0.0.1:8000/docs
 | GET/HEAD | `/api/files/{id}/download` | 下载完整文件（内部跨分片虚拟流式读取，支持 `Range`） |
 | DELETE | `/api/files/{id}` | 删除元数据和磁盘文件 |
 
-上传落盘时按 `FILE_CHUNK_SIZE`（默认 8 MiB）自动切片，文件以分片形式保存在 `data/files/<storage_key>/<seq>.part`，不保留完整副本；元数据和分片索引保存在 SQLite `data/app.db`。`GET /download` 对外仍是完整文件下载，支持 `Range`/`HEAD`，由实现层跨分片流式读取。配置了 `API_TOKEN` 时，所有文件接口必须携带请求头 `X-API-Token: <token>`。
+上传落盘时按 `FILE_CHUNK_SIZE`（默认 8 MiB）自动切片，文件以分片形式保存在 `data/files/<storage_key>/<seq>.part`，不保留完整副本；元数据和分片索引保存在 PostgreSQL 的 `files` 与 `file_chunks` 表。`GET /download` 对外仍是完整文件下载，支持 `Range`/`HEAD`，由实现层跨分片流式读取。配置了 `API_TOKEN` 时，所有文件接口必须携带请求头 `X-API-Token: <token>`。
 
 ## Demo 接口场景
 
@@ -226,6 +226,7 @@ tail -f logs/app_wf_$(date +%F).log
 ```text
 Dockerfile
 compose.yaml
+alembic.ini
 nginx/
   nginx.conf
 scripts/
@@ -233,6 +234,7 @@ scripts/
 main.py
 app/
   __init__.py
+  models.py
   errors.py
   config.py
   db.py
@@ -248,12 +250,15 @@ app/
     demo.py
     hello.py
     health.py
+migrations/
+  versions/
 ```
 
 - `main.py`：创建 FastAPI 应用并挂载路由
 - `app/errors.py`：业务错误 `BizError`、错误码和异常子类
 - `app/config.py`：环境变量配置
-- `app/db.py`：SQLite 初始化和文件元数据读写
+- `app/models.py`：SQLAlchemy ORM 模型
+- `app/db.py`：SQLAlchemy async/asyncpg 连接池与文件元数据读写
 - `app/security.py`：API Token 鉴权依赖
 - `app/storage.py`：文件流式分片落盘、删除和路径解析
 - `app/responses.py`：跨分片虚拟文件下载响应，支持 `Range` 和 `HEAD`
@@ -276,7 +281,10 @@ app/
 | --- | --- | --- |
 | `API_TOKEN` | 空 | API Token；为空时开发模式放行并告警 |
 | `FILE_STORAGE_DIR` | `data/files` | 分片存储根目录 |
-| `DB_PATH` | `data/app.db` | SQLite 数据库路径 |
+| `DATABASE_URL` | `postgresql+asyncpg://file_server:file_server@127.0.0.1:15432/file_server` | SQLAlchemy asyncpg 数据库连接 |
+| `POSTGRES_USER` | `file_server` | Compose 中 PostgreSQL 用户名 |
+| `POSTGRES_PASSWORD` | `file_server` | Compose 中 PostgreSQL 密码（仅开发用） |
+| `POSTGRES_DB` | `file_server` | Compose 中 PostgreSQL 数据库名 |
 | `MAX_UPLOAD_SIZE` | `104857600` | 单文件上传上限，单位字节 |
 | `FILE_CHUNK_SIZE` | `8388608` | 上传自动切片大小，单位字节 |
 | `PYTHON_BASE_IMAGE` | `python:3.13-slim` | Docker 运行阶段基础镜像，网络受限时可换成镜像加速源 |
@@ -291,15 +299,15 @@ API_TOKEN=your-token docker compose up -d --build
 curl -H "X-API-Token: your-token" http://127.0.0.1:8080/api/files
 ```
 
-容器使用标准 uv 两阶段构建，运行阶段不再包含 uv。文件、数据库、日志分别挂载 volume，容器重建后数据不丢失。
+容器使用标准 uv 两阶段构建，运行阶段不再包含 uv。Compose 启动顺序是 `postgres` healthy -> `migrate` 执行 `alembic upgrade head` -> `app1/app2` 启动 -> `nginx` 对外服务。文件、数据库、日志分别使用 volume，容器重建后数据不丢失。
 
 部署时请务必设置 `API_TOKEN`；未设置时容器仍会启动，但文件接口不做鉴权并打印告警。
 
 ### Nginx 负载均衡
 
-`compose.yaml` 会启动 `app1`、`app2` 和 `nginx` 三个服务：
+`compose.yaml` 会启动 `postgres`、`migrate`、`app1`、`app2` 和 `nginx`：
 
-- `app1`、`app2` 共享 `file-data` 和 `db-data` 卷，分片文件和元数据对两个实例一致。
+- `app1`、`app2` 共享 `file-data` 卷，并通过同一个 PostgreSQL 读写元数据，两个实例对文件保持一致。
 - `nginx` 通过 `nginx/nginx.conf` 中的 upstream 对两个 app 实例轮询转发。
 - 对外访问统一走 `http://127.0.0.1:8080`，app 容器不再直接映射宿主机端口。
 - 两个 app 都配置了 `/healthz` 健康检查，Nginx 等待实例 healthy 后才启动。
@@ -320,6 +328,15 @@ docker compose ps
 docker compose logs app1 | grep "GET /healthz"
 docker compose logs app2 | grep "GET /healthz"
 ```
+
+本地 VS Code 调试时，先启动 PostgreSQL 并执行迁移：
+
+```bash
+docker compose up -d postgres
+uv run alembic upgrade head
+```
+
+`.vscode/launch.json` 已配置 `DATABASE_URL`，连接地址为 `127.0.0.1:15432`。
 
 ### 多线程 Range 下载
 

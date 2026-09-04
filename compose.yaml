@@ -1,4 +1,36 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-file_server}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-file_server}
+      POSTGRES_DB: ${POSTGRES_DB:-file_server}
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  migrate:
+    image: python-file-server:latest
+    environment:
+      DATABASE_URL: postgresql+asyncpg://file_server:file_server@postgres:5432/file_server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
   app1:
     build:
       context: .
@@ -9,14 +41,16 @@ services:
       - "8000"
     environment:
       API_TOKEN: ${API_TOKEN:-}
+      DATABASE_URL: postgresql+asyncpg://file_server:file_server@postgres:5432/file_server
       FILE_STORAGE_DIR: /app/data/files
-      DB_PATH: /app/data/db/app.db
       MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-104857600}
     volumes:
       - file-data:/app/data/files
-      - db-data:/app/data/db
       - logs-app1:/app/logs
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -36,17 +70,16 @@ services:
       - "8000"
     environment:
       API_TOKEN: ${API_TOKEN:-}
+      DATABASE_URL: postgresql+asyncpg://file_server:file_server@postgres:5432/file_server
       FILE_STORAGE_DIR: /app/data/files
-      DB_PATH: /app/data/db/app.db
       MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-104857600}
     volumes:
       - file-data:/app/data/files
-      - db-data:/app/data/db
       - logs-app2:/app/logs
     restart: unless-stopped
     depends_on:
-      app1:
-        condition: service_started
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -75,6 +108,6 @@ services:
 
 volumes:
   file-data:
-  db-data:
   logs-app1:
   logs-app2:
+  postgres-data:
