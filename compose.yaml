@@ -1,12 +1,12 @@
 services:
-  app:
+  app1:
     build:
       context: .
       args:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.13-slim}
     image: python-file-server:latest
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       API_TOKEN: ${API_TOKEN:-}
       FILE_STORAGE_DIR: /app/data/files
@@ -15,10 +15,66 @@ services:
     volumes:
       - file-data:/app/data/files
       - db-data:/app/data/db
-      - logs:/app/logs
+      - logs-app1:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  app2:
+    image: python-file-server:latest
+    expose:
+      - "8000"
+    environment:
+      API_TOKEN: ${API_TOKEN:-}
+      FILE_STORAGE_DIR: /app/data/files
+      DB_PATH: /app/data/db/app.db
+      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-104857600}
+    volumes:
+      - file-data:/app/data/files
+      - db-data:/app/data/db
+      - logs-app2:/app/logs
+    restart: unless-stopped
+    depends_on:
+      app1:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    depends_on:
+      app1:
+        condition: service_healthy
+      app2:
+        condition: service_healthy
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     restart: unless-stopped
 
 volumes:
   file-data:
   db-data:
-  logs:
+  logs-app1:
+  logs-app2:
