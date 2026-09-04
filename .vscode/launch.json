@@ -16,6 +16,7 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "env": {
+        "DATABASE_URL": "postgresql+asyncpg://file_server:file_server@127.0.0.1:15432/file_server",
         "PYTHONPATH": "${workspaceFolder}"
       },
       "console": "integratedTerminal"

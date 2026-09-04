@@ -1,56 +1,89 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
-import aiosqlite
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.config import settings
+from app.models import FileChunkRecord, FileRecord
+
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS files (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    storage_key   TEXT NOT NULL UNIQUE,
-    original_name TEXT NOT NULL,
-    content_type  TEXT NOT NULL DEFAULT 'application/octet-stream',
-    size          INTEGER NOT NULL CHECK (size >= 0),
-    sha256        TEXT NOT NULL,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS file_chunks (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_id    INTEGER NOT NULL,
-    seq        INTEGER NOT NULL CHECK (seq > 0),
-    size       INTEGER NOT NULL CHECK (size > 0),
-    sha256     TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (file_id, seq)
-);
-
-CREATE INDEX IF NOT EXISTS idx_files_created_at ON files(created_at);
-CREATE INDEX IF NOT EXISTS idx_file_chunks_file_id ON file_chunks(file_id);
-"""
-
-SELECT_COLUMNS = (
-    "id, storage_key, original_name, content_type, size, sha256, "
-    "created_at, updated_at"
-)
-CHUNK_SELECT_COLUMNS = "id, file_id, seq, size, sha256, created_at"
+def _format_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-async def init_db(db_path: Path) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(str(db_path)) as db:
-        await db.executescript(SCHEMA)
-        await db.execute("PRAGMA journal_mode=WAL")
+def _file_to_dict(file: FileRecord) -> dict[str, Any]:
+    return {
+        "id": file.id,
+        "storage_key": file.storage_key,
+        "original_name": file.original_name,
+        "content_type": file.content_type,
+        "size": file.size,
+        "sha256": file.sha256,
+        "created_at": _format_datetime(file.created_at),
+        "updated_at": _format_datetime(file.updated_at),
+    }
+
+
+def _chunk_to_dict(chunk: FileChunkRecord) -> dict[str, Any]:
+    return {
+        "id": chunk.id,
+        "file_id": chunk.file_id,
+        "seq": chunk.seq,
+        "size": chunk.size,
+        "sha256": chunk.sha256,
+        "created_at": _format_datetime(chunk.created_at),
+    }
+
+
+async def init_db() -> None:
+    global _engine, _session_factory
+    if _engine is not None:
+        return
+    _engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+    )
+    _session_factory = async_sessionmaker(
+        _engine,
+        expire_on_commit=False,
+    )
+
+
+async def close_db() -> None:
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None
+
+
+@asynccontextmanager
+async def db_session() -> AsyncIterator[AsyncSession]:
+    if _session_factory is None:
+        await init_db()
+    assert _session_factory is not None
+    async with _session_factory() as session:
+        yield session
 
 
 async def insert_file_with_chunks(
-    db: aiosqlite.Connection,
+    db: AsyncSession,
     *,
     storage_key: str,
     original_name: str,
@@ -59,127 +92,105 @@ async def insert_file_with_chunks(
     sha256: str,
     chunks: list[tuple[int, int, str]],
 ) -> dict[str, Any]:
+    file = FileRecord(
+        storage_key=storage_key,
+        original_name=original_name,
+        content_type=content_type,
+        size=size,
+        sha256=sha256,
+    )
     try:
-        cursor = await db.execute(
-            """
-            INSERT INTO files (storage_key, original_name, content_type, size, sha256)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (storage_key, original_name, content_type, size, sha256),
-        )
-        file_id = cursor.lastrowid
-        chunk_rows = [
-            (file_id, seq, chunk_size, chunk_sha256)
-            for seq, chunk_size, chunk_sha256 in chunks
-        ]
-        await db.executemany(
-            """
-            INSERT INTO file_chunks (file_id, seq, size, sha256)
-            VALUES (?, ?, ?, ?)
-            """,
-            chunk_rows,
-        )
+        db.add(file)
+        await db.flush()
+        for seq, chunk_size, chunk_sha256 in chunks:
+            db.add(
+                FileChunkRecord(
+                    file_id=file.id,
+                    seq=seq,
+                    size=chunk_size,
+                    sha256=chunk_sha256,
+                )
+            )
         await db.commit()
-        return await get_file_record(db, file_id)
     except Exception:
         await db.rollback()
         raise
+    await db.refresh(file)
+    return _file_to_dict(file)
 
 
-async def get_file_record(db: aiosqlite.Connection, file_id: int) -> dict[str, Any] | None:
-    cursor = await db.execute(
-        f"SELECT {SELECT_COLUMNS} FROM files WHERE id = ?",
-        (file_id,),
-    )
-    row = await cursor.fetchone()
-    return dict(row) if row is not None else None
+async def get_file_record(
+    db: AsyncSession,
+    file_id: int,
+) -> dict[str, Any] | None:
+    file = await db.get(FileRecord, file_id)
+    if file is None:
+        return None
+    return _file_to_dict(file)
 
 
 async def list_file_chunk_records(
-    db: aiosqlite.Connection,
+    db: AsyncSession,
     file_id: int,
 ) -> list[dict[str, Any]]:
-    cursor = await db.execute(
-        f"""
-        SELECT {CHUNK_SELECT_COLUMNS}
-        FROM file_chunks
-        WHERE file_id = ?
-        ORDER BY seq
-        """,
-        (file_id,),
+    result = await db.scalars(
+        select(FileChunkRecord)
+        .where(FileChunkRecord.file_id == file_id)
+        .order_by(FileChunkRecord.seq)
     )
-    rows = await cursor.fetchall()
-    return [dict(row) for row in rows]
+    return [_chunk_to_dict(chunk) for chunk in result.all()]
 
 
 async def get_file_chunk_record(
-    db: aiosqlite.Connection,
+    db: AsyncSession,
     file_id: int,
     seq: int,
 ) -> dict[str, Any] | None:
-    cursor = await db.execute(
-        f"""
-        SELECT {CHUNK_SELECT_COLUMNS}
-        FROM file_chunks
-        WHERE file_id = ? AND seq = ?
-        """,
-        (file_id, seq),
+    result = await db.scalars(
+        select(FileChunkRecord).where(
+            FileChunkRecord.file_id == file_id,
+            FileChunkRecord.seq == seq,
+        )
     )
-    row = await cursor.fetchone()
-    return dict(row) if row is not None else None
+    chunk = result.first()
+    if chunk is None:
+        return None
+    return _chunk_to_dict(chunk)
 
 
 async def list_file_records(
-    db: aiosqlite.Connection,
+    db: AsyncSession,
     *,
     keyword: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
+    statement = select(FileRecord).order_by(FileRecord.id.desc())
     if keyword:
-        cursor = await db.execute(
-            f"""
-            SELECT {SELECT_COLUMNS} FROM files
-            WHERE original_name LIKE ?
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (f"%{keyword}%", limit, offset),
+        statement = statement.where(
+            FileRecord.original_name.like(f"%{keyword}%")
         )
-    else:
-        cursor = await db.execute(
-            f"""
-            SELECT {SELECT_COLUMNS} FROM files
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        )
-    rows = await cursor.fetchall()
-    return [dict(row) for row in rows]
+    result = await db.scalars(
+        statement.limit(limit).offset(offset)
+    )
+    return [_file_to_dict(file) for file in result.all()]
 
 
-async def delete_file_record(db: aiosqlite.Connection, file_id: int) -> dict[str, Any] | None:
-    record = await get_file_record(db, file_id)
-    if record is None:
+async def delete_file_record(
+    db: AsyncSession,
+    file_id: int,
+) -> dict[str, Any] | None:
+    file = await db.get(FileRecord, file_id)
+    if file is None:
         return None
-    await db.execute("DELETE FROM file_chunks WHERE file_id = ?", (file_id,))
-    await db.execute("DELETE FROM files WHERE id = ?", (file_id,))
-    await db.commit()
-    return record
-
-
-async def _connect(db_path: Path) -> aiosqlite.Connection:
-    db = await aiosqlite.connect(str(db_path))
-    db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA journal_mode=WAL")
-    return db
-
-
-@asynccontextmanager
-async def db_session() -> AsyncIterator[aiosqlite.Connection]:
-    db = await _connect(settings.db_path)
+    record = _file_to_dict(file)
     try:
-        yield db
-    finally:
-        await db.close()
+        await db.execute(
+            delete(FileChunkRecord).where(FileChunkRecord.file_id == file_id)
+        )
+        await db.delete(file)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return record

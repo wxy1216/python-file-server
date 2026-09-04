@@ -24,7 +24,10 @@ class Settings:
     storage_dir: Path = Path(
         os.getenv("FILE_STORAGE_DIR", str(BASE_DIR / "data" / "files"))
     )
-    db_path: Path = Path(os.getenv("DB_PATH", str(BASE_DIR / "data" / "app.db")))
+    database_url: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://file_server:file_server@127.0.0.1:15432/file_server",
+    )
     max_upload_size: int = _env_int("MAX_UPLOAD_SIZE", 100 * 1024 * 1024)
     file_chunk_size: int = max(
         1, _env_int("FILE_CHUNK_SIZE", 8 * 1024 * 1024)

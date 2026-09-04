@@ -8,7 +8,7 @@ from app.api.hello import router as hello_router
 from app.api.demo import router as demo_router
 from app.api.files import router as files_router
 from app.config import settings
-from app.db import init_db
+from app.db import close_db, init_db
 from app.logging_config import setup_logging
 from app.middleware import ApiMiddleware, TraceMiddleware
 from app.storage import ensure_storage_dir
@@ -22,8 +22,9 @@ async def lifespan(_: FastAPI):
     if not settings.api_token:
         logger.warning("API_TOKEN is not set; /api/files is unauthenticated")
     ensure_storage_dir()
-    await init_db(settings.db_path)
+    await init_db()
     yield
+    await close_db()
 
 
 app = FastAPI(
