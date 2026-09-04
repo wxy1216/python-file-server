@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from loguru import logger
 
+from app.api.health import router as health_router
 from app.api.hello import router as hello_router
 from app.api.demo import router as demo_router
 from app.api.files import router as files_router
@@ -37,6 +38,7 @@ app.add_middleware(TraceMiddleware)
 app.include_router(hello_router)
 app.include_router(demo_router, prefix="/api/demo")
 app.include_router(files_router)
+app.include_router(health_router)
 
 
 if __name__ == "__main__":
