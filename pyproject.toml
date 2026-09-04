@@ -5,9 +5,12 @@ description = "Python file server project managed by uv"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "aiosqlite>=0.22.1",
+    "alembic>=1.19.1",
+    "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
+    "greenlet>=3.5.5",
     "loguru>=0.7.3",
     "python-multipart>=0.0.32",
+    "sqlalchemy>=2.0.52",
     "uvicorn[standard]>=0.52.4",
 ]
