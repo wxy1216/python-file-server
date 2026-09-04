@@ -224,6 +224,12 @@ tail -f logs/app_wf_$(date +%F).log
 ## 工程结构
 
 ```text
+Dockerfile
+compose.yaml
+nginx/
+  nginx.conf
+scripts/
+  download_parallel.py
 main.py
 app/
   __init__.py
@@ -241,6 +247,7 @@ app/
     files.py
     demo.py
     hello.py
+    health.py
 ```
 
 - `main.py`：创建 FastAPI 应用并挂载路由
@@ -256,6 +263,7 @@ app/
 - `app/trace.py`：B3 traceId/spanId 上下文与生成逻辑
 - `app/api/demo.py`：HTTP 方法和错误场景演示路由
 - `app/api/hello.py`：hello 接口路由
+- `app/api/health.py`：`/healthz` 健康检查接口
 
 ## 环境要求
 
@@ -280,12 +288,64 @@ app/
 API_TOKEN=your-token docker compose up -d --build
 
 # 验证
-curl -H "X-API-Token: your-token" http://127.0.0.1:8000/api/files
+curl -H "X-API-Token: your-token" http://127.0.0.1:8080/api/files
 ```
 
 容器使用标准 uv 两阶段构建，运行阶段不再包含 uv。文件、数据库、日志分别挂载 volume，容器重建后数据不丢失。
 
 部署时请务必设置 `API_TOKEN`；未设置时容器仍会启动，但文件接口不做鉴权并打印告警。
+
+### Nginx 负载均衡
+
+`compose.yaml` 会启动 `app1`、`app2` 和 `nginx` 三个服务：
+
+- `app1`、`app2` 共享 `file-data` 和 `db-data` 卷，分片文件和元数据对两个实例一致。
+- `nginx` 通过 `nginx/nginx.conf` 中的 upstream 对两个 app 实例轮询转发。
+- 对外访问统一走 `http://127.0.0.1:8080`，app 容器不再直接映射宿主机端口。
+- 两个 app 都配置了 `/healthz` 健康检查，Nginx 等待实例 healthy 后才启动。
+
+```bash
+# 普通启动
+docker compose up -d --build
+
+# Docker Hub 拉取 python 基础镜像超时时，可用本机已有镜像源
+PYTHON_BASE_IMAGE=docker.m.daocloud.io/library/python:3.13-slim \
+  docker compose up -d --build
+
+# 查看健康状态与实例
+curl http://127.0.0.1:8080/healthz
+docker compose ps
+
+# 分别查看请求是否分发到两个实例
+docker compose logs app1 | grep "GET /healthz"
+docker compose logs app2 | grep "GET /healthz"
+```
+
+### 多线程 Range 下载
+
+先上传一个测试文件并拿到 `file_id`：
+
+```bash
+curl -F "file=@README.md" http://127.0.0.1:8080/api/files
+```
+
+再使用 `scripts/download_parallel.py` 并发下载，脚本会按 Range 分段、多线程拉取、逐段校验 `206 Content-Range`，最后比对整文件 SHA-256：
+
+```bash
+python scripts/download_parallel.py \
+  --base-url http://127.0.0.1:8080 \
+  --file-id 2 \
+  --threads 4 \
+  --range-size 2097152 \
+  -o README.download.md
+```
+
+参数说明：
+
+- `--threads`：最大并发连接数。
+- `--range-size`：固定每段字节数；不传时按线程数均分。
+- `--retries`：每个区间失败后的重试次数。
+- `--token`：服务端配置了 `API_TOKEN` 时使用，也可用环境变量 `PFS_API_TOKEN`。
 
 ## 创建工程步骤
 
